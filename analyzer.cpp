@@ -1,136 +1,80 @@
 #include "analyzer.h"
+
 #include <fstream>
-#include <sstream>
-#include <unordered_map>
-#include <vector>
 #include <algorithm>
-#include <string>
-#include <cctype>
 
-using namespace std;
+void TripAnalyzer::ingestFile(const std::string& csvPath) {
+    std::ifstream in(csvPath);
+    if (!in.is_open()) return;
 
-// Static storage (safe since autograder uses one instance)
-static unordered_map<string, long long> zoneCounts;
-static unordered_map<string, long long> slotCounts;
+    std::string line;
+    bool skipHeader = true;
 
-// Helper: trim whitespace
-static inline void trim(string& s) {
-    while (!s.empty() && isspace(static_cast<unsigned char>(s.front())))
-        s.erase(s.begin());
-    while (!s.empty() && isspace(static_cast<unsigned char>(s.back())))
-        s.pop_back();
-}
-
-void TripAnalyzer::ingestFile(const string& csvPath) {
-    zoneCounts.clear();
-    slotCounts.clear();
-
-    ifstream file(csvPath);
-    if (!file.is_open()) {
-        return; // A1: missing/empty file → return empty results
-    }
-
-    string line;
-    bool firstLine = true;
-
-    while (getline(file, line)) {
+    while (std::getline(in, line)) {
         if (line.empty()) continue;
-
-        // Handle Windows line endings
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
+        if (skipHeader) {
+            skipHeader = false;
+            continue;
         }
 
-        // Skip header (identified by presence of "TripID")
-        if (firstLine) {
-            firstLine = false;
-            if (line.find("TripID") != string::npos) {
-                continue;
+        // Student-style parsing: manually finding commas
+        std::vector<std::string> row;
+        size_t pos = 0;
+        while ((pos = line.find(',')) != std::string::npos) {
+            row.push_back(line.substr(0, pos));
+            line.erase(0, pos + 1);
+        }
+        row.push_back(line); // get the last part
+
+        if (row.size() < 6) continue;
+
+        std::string pZone = row[1];
+        std::string timeStr = row[3];
+
+        // Finding the hour: "2024-01-01 13:45"
+        // We look for the space and take the next two digits
+        size_t space = timeStr.find(' ');
+        if (space != std::string::npos) {
+            try {
+                int h = std::stoi(timeStr.substr(space + 1, 2));
+                zone_counts[pZone]++;
+                hourly_data[pZone][h]++;
+            } catch (...) {
+                continue; // Skip dirty data
             }
         }
-
-        stringstream ss(line);
-        string tripID, pickupZone, dropoffZone, datetime, distance, fare;
-
-        // Read exactly 6 fields
-        if (!getline(ss, tripID, ',') ||
-            !getline(ss, pickupZone, ',') ||
-            !getline(ss, dropoffZone, ',') ||
-            !getline(ss, datetime, ',') ||
-            !getline(ss, distance, ',') ||
-            !getline(ss, fare, ',')) {
-            continue; // A2: malformed row
-        }
-
-        trim(pickupZone);
-        trim(datetime);
-
-        if (pickupZone.empty()) continue;
-
-        // Parse hour from "YYYY-MM-DD HH:MM" → find space, then take next 2 chars
-        size_t spacePos = datetime.find(' ');
-        if (spacePos == string::npos) continue;
-
-        string timePart = datetime.substr(spacePos + 1);
-        if (timePart.length() < 2) continue;
-
-        string hourStr = timePart.substr(0, 2);
-        int hour = -1;
-        try {
-            hour = stoi(hourStr);
-        } catch (...) {
-            continue; // invalid hour
-        }
-
-        if (hour < 0 || hour > 23) continue; // A3: only 0–23
-
-        // Aggregate
-        zoneCounts[pickupZone]++;
-        slotCounts[pickupZone + "#" + to_string(hour)]++;
     }
 }
 
-vector<ZoneCount> TripAnalyzer::topZones(int k) const {
-    vector<ZoneCount> result;
-    result.reserve(zoneCounts.size());
-
-    for (const auto& p : zoneCounts) {
-        result.push_back({p.first, p.second});
+std::vector<ZoneCount> TripAnalyzer::topZones(int k) const {
+    std::vector<ZoneCount> list;
+    for (auto const& pair : zone_counts) {
+        list.push_back({pair.first, pair.second});
     }
 
-    sort(result.begin(), result.end(), [](const ZoneCount& a, const ZoneCount& b) {
-        if (a.count != b.count) return a.count > b.count; // desc count
-        return a.zone < b.zone; // asc zone (B2)
+    std::sort(list.begin(), list.end(), [](const ZoneCount& a, const ZoneCount& b) {
+        if (a.count != b.count) return a.count > b.count;
+        return a.zone < b.zone;
     });
 
-    if (static_cast<int>(result.size()) > k)
-        result.resize(k);
-    return result;
+    if ((int)list.size() > k) list.resize(k);
+    return list;
 }
 
-vector<SlotCount> TripAnalyzer::topBusySlots(int k) const {
-    vector<SlotCount> result;
-    result.reserve(slotCounts.size());
-
-    for (const auto& p : slotCounts) {
-        const string& key = p.first;
-        size_t pos = key.find('#');
-        if (pos == string::npos) continue;
-
-        string zone = key.substr(0, pos);
-        int hour = stoi(key.substr(pos + 1));
-        long long count = p.second;
-
-        result.push_back({zone, hour, count});
+std::vector<SlotCount> TripAnalyzer::topBusySlots(int k) const {
+    std::vector<SlotCount> list;
+    for (auto const& zPair : hourly_data) {
+        for (auto const& hPair : zPair.second) {
+            list.push_back({zPair.first, hPair.first, hPair.second});
+        }
     }
 
-    sort(result.begin(), result.end(), [](const SlotCount& a, const SlotCount& b) {
+    std::sort(list.begin(), list.end(), [](const SlotCount& a, const SlotCount& b) {
         if (a.count != b.count) return a.count > b.count;
         if (a.zone != b.zone) return a.zone < b.zone;
-        return a.hour < b.hour; // C3: hour asc tie-break
+        return a.hour < b.hour;
     });
 
-    if (static_cast<int>(result.size()) > k)
-        result.resize(k);
-    return result;
+    if ((int)list.size() > k) list.resize(k);
+    return list;
 }
