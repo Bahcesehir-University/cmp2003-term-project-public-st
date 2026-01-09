@@ -2,129 +2,148 @@
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
+#include <queue>
 #include <vector>
-#include <algorithm>
 #include <cctype>
-#include <string>
 
 using namespace std;
 
-// Use pair for slot key to avoid string concatenation
+
 static unordered_map<string, long long> zoneCounts;
-static unordered_map<string, unordered_map<int, long long>> slotCounts;
+static unordered_map<string, long long> slotCounts;
+
 
 static inline void trim(string& s) {
-    size_t start = s.find_first_not_of(" \t\r\n");
-    size_t end = s.find_last_not_of(" \t\r\n");
-    if (start == string::npos) {
-        s.clear();
-    } else {
-        s = s.substr(start, end - start + 1);
-    }
+    size_t start = 0;
+    while (start < s.size() && isspace(s[start])) start++;
+
+    size_t end = s.size();
+    while (end > start && isspace(s[end - 1])) end--;
+
+    s = s.substr(start, end - start);
 }
+
 
 void TripAnalyzer::ingestFile(const string& csvPath) {
     zoneCounts.clear();
     slotCounts.clear();
 
-    ifstream file(csvPath);
-    if (!file.is_open()) {
-        return; // A1
-    }
+
+    zoneCounts.reserve(100000);
+    slotCounts.reserve(100000);
+
+    ifstream file(csvPath, ios::in);
+    if (!file.is_open())
+        return;
 
     string line;
     bool firstLine = true;
 
     while (getline(file, line)) {
-        if (line.empty()) continue;
+        if (line.empty())
+            continue;
 
-        if (!line.empty() && line.back() == '\r') {
+        if (line.back() == '\r')
             line.pop_back();
-        }
 
+      
         if (firstLine) {
             firstLine = false;
-            if (line.find("TripID") != string::npos) {
+            if (line.find("TripID") != string::npos)
                 continue;
-            }
         }
+
+        string tripID, pickupZone, dropoffZone, datetime;
+        string distance, fare;
 
         stringstream ss(line);
-        string tripID, pickupZone, dropoffZone, datetime, distance, fare;
-
-        if (!getline(ss, tripID, ',') ||
-            !getline(ss, pickupZone, ',') ||
-            !getline(ss, dropoffZone, ',') ||
-            !getline(ss, datetime, ',') ||
-            !getline(ss, distance, ',') ||
-            !getline(ss, fare, ',')) {
-            continue; // A2
-        }
+        if (!getline(ss, tripID, ',')) continue;
+        if (!getline(ss, pickupZone, ',')) continue;
+        if (!getline(ss, dropoffZone, ',')) continue;
+        if (!getline(ss, datetime, ',')) continue;
+        if (!getline(ss, distance, ',')) continue;
+        if (!getline(ss, fare, ',')) continue;
 
         trim(pickupZone);
         trim(datetime);
 
-        if (pickupZone.empty()) continue;
+        if (datetime.size() < 5)
+            continue;
 
-        size_t spacePos = datetime.find(' ');
-        if (spacePos == string::npos) continue;
-
-        string timePart = datetime.substr(spacePos + 1);
-        size_t colonPos = timePart.find(':');
-        if (colonPos == string::npos || colonPos == 0) continue;
-
-        string hourStr = timePart.substr(0, colonPos);
-        trim(hourStr);
-        if (hourStr.empty()) continue;
-
-        int hour = -1;
+        int hour;
         try {
-            hour = stoi(hourStr);
+            hour = stoi(datetime.substr(datetime.size() - 5, 2));
         } catch (...) {
             continue;
         }
 
-        if (hour < 0 || hour > 23) continue; // A3
+        if (hour < 0 || hour > 23)
+            continue;
 
-        zoneCounts[pickupZone]++;
-        slotCounts[pickupZone][hour]++;
+        ++zoneCounts[pickupZone];
+        ++slotCounts[pickupZone + "#" + to_string(hour)];
     }
+
+    file.close();
 }
 
+
 vector<ZoneCount> TripAnalyzer::topZones(int k) const {
-    vector<ZoneCount> result;
-    result.reserve(zoneCounts.size());
-    for (const auto& p : zoneCounts) {
-        result.push_back({p.first, p.second});
+    auto cmp = [](const ZoneCount& a, const ZoneCount& b) {
+        if (a.count != b.count)
+            return a.count > b.count;   
+        return a.zone < b.zone;
+    };
+
+    priority_queue<ZoneCount, vector<ZoneCount>, decltype(cmp)> heap(cmp);
+
+    for (const auto& z : zoneCounts) {
+        heap.push({z.first, z.second});
+        if ((int)heap.size() > k)
+            heap.pop();
     }
 
-    sort(result.begin(), result.end(), [](const ZoneCount& a, const ZoneCount& b) {
-        if (a.count != b.count) return a.count > b.count;
-        return a.zone < b.zone;
-    });
+    vector<ZoneCount> result(heap.size());
+    for (int i = (int)heap.size() - 1; i >= 0; --i) {
+        result[i] = heap.top();
+        heap.pop();
+    }
 
-    if (static_cast<int>(result.size()) > k)
-        result.resize(k);
     return result;
 }
 
+
 vector<SlotCount> TripAnalyzer::topBusySlots(int k) const {
-    vector<SlotCount> result;
-    result.reserve(slotCounts.size() * 24);
-    for (const auto& zoneEntry : slotCounts) {
-        const string& zone = zoneEntry.first;
-        for (const auto& hourEntry : zoneEntry.second) {
-            result.push_back({zone, hourEntry.first, hourEntry.second});
-        }
+    auto cmp = [](const SlotCount& a, const SlotCount& b) {
+        if (a.count != b.count)
+            return a.count > b.count;
+        if (a.zone != b.zone)
+            return a.zone < b.zone;
+        return a.hour < b.hour;
+    };
+
+    priority_queue<SlotCount, vector<SlotCount>, decltype(cmp)> heap(cmp);
+
+    for (const auto& s : slotCounts) {
+        size_t pos = s.first.find('#');
+        if (pos == string::npos)
+            continue;
+
+        SlotCount sc;
+        sc.zone = s.first.substr(0, pos);
+        sc.hour = stoi(s.first.substr(pos + 1));
+        sc.count = s.second;
+
+        heap.push(sc);
+        if ((int)heap.size() > k)
+            heap.pop();
     }
 
-    sort(result.begin(), result.end(), [](const SlotCount& a, const SlotCount& b) {
-        if (a.count != b.count) return a.count > b.count;
-        if (a.zone != b.zone) return a.zone < b.zone;
-        return a.hour < b.hour;
-    });
+    vector<SlotCount> result(heap.size());
+    for (int i = (int)heap.size() - 1; i >= 0; --i) {
+        result[i] = heap.top();
+        heap.pop();
+    }
 
-    if (static_cast<int>(result.size()) > k)
-        result.resize(k);
     return result;
 }
