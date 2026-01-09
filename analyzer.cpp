@@ -67,11 +67,12 @@ void TripAnalyzer::ingestFile(const string& csvPath) {
 
         if (pickupZone.empty()) continue;
 
-        // Parse hour from "YYYY-MM-DD HH:MM" → take last 5 chars: "HH:MM"
-        if (datetime.size() < 5) continue;
+        // Parse hour from "YYYY-MM-DD HH:MM" → find space, then take next 2 chars
+        size_t spacePos = datetime.find(' ');
+        if (spacePos == string::npos) continue;
 
-        string timePart = datetime.substr(datetime.size() - 5);
-        if (timePart.size() != 5 || timePart[2] != ':') continue;
+        string timePart = datetime.substr(spacePos + 1);
+        if (timePart.length() < 2) continue;
 
         string hourStr = timePart.substr(0, 2);
         int hour = -1;
