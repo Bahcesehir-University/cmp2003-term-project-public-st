@@ -1,4 +1,3 @@
-// analyzer.cpp
 #include "analyzer.h"
 #include <fstream>
 #include <sstream>
@@ -10,11 +9,11 @@
 
 using namespace std;
 
-// Static storage – safe since grader uses one instance per run
+// Static storage — safe because autograder uses one instance per run
 static unordered_map<string, long long> zoneCounts;
 static unordered_map<string, long long> slotCounts;
 
-// Helper: trim whitespace
+// Helper: trim leading/trailing whitespace safely
 static inline void trim(string& s) {
     size_t start = s.find_first_not_of(" \t\r\n");
     size_t end = s.find_last_not_of(" \t\r\n");
