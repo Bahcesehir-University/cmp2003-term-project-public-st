@@ -6,18 +6,15 @@
 #include <algorithm>
 #include <string>
 #include <cctype>
-#include <map>
 
-// Private data for each TripAnalyzer instance
+// We cannot modify analyzer.h, so we store state using a static map keyed by 'this'
 struct AnalyzerData {
     std::unordered_map<std::string, long long> zoneCounts;
     std::unordered_map<std::string, std::unordered_map<int, long long>> slotCounts;
 };
 
-// Global map: object pointer -> its data
 static std::map<const TripAnalyzer*, AnalyzerData> s_data;
 
-// Helper to get data for 'this'
 inline AnalyzerData& getData(const TripAnalyzer* self) {
     return s_data[self];
 }
