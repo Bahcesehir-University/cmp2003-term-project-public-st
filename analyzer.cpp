@@ -1,112 +1,113 @@
-#include <iostream>
-#include <vector>
-#include <string>
+#include "analyzer.h"
+#include <fstream>
+#include <sstream>
 #include <unordered_map>
+#include <vector>
 #include <algorithm>
-#include <cstdio>
+#include <string>
+#include <cctype>
+#include <map>
 
-using namespace std;
+// Use a static map to associate each object with its data
+static std::map<const TripAnalyzer*, 
+    std::pair<
+        std::unordered_map<std::string, long long>,
+        std::unordered_map<std::string, std::unordered_map<int, long long>>
+    >
+> g_state;
 
-struct ZoneCount {
-    string zone;
-    long long count;
-};
+void TripAnalyzer::ingestFile(const std::string& csvPath) {
+    auto& [zoneCounts, slotCounts] = g_state[this];
+    zoneCounts.clear();
+    slotCounts.clear();
 
-struct SlotCount {
-    string zone;
-    int hour;
-    long long count;
-};
+    std::ifstream file(csvPath);
+    if (!file.is_open()) {
+        return; // A1: missing file → return empty
+    }
 
-class TripAnalyzer {
-private:
-    unordered_map<string, long long> zone_counts;
-    unordered_map<string, unordered_map<int, long long>> hourly_data;
+    std::string line;
+    std::getline(file, line); // skip header
 
-public:
-    void ingestStdin() {
-        string line;
-        bool skipHeader = true;
+    while (std::getline(file, line)) {
+        if (line.empty()) continue;
 
-        while (getline(cin, line)) {
-            if (line.empty()) continue;
-            if (skipHeader) {
-                skipHeader = false;
-                continue;
-            }
+        std::stringstream ss(line);
+        std::string field;
+        std::vector<std::string> fields;
+        while (std::getline(ss, field, ',')) {
+            fields.push_back(field);
+        }
 
-            vector<string> row;
-            size_t pos = 0;
-            while ((pos = line.find(',')) != string::npos) {
-                row.push_back(line.substr(0, pos));
-                line.erase(0, pos + 1);
-            }
-            row.push_back(line);
+        if (fields.size() != 6) continue; // A2: malformed row
 
-            if (row.size() < 6) continue;
+        std::string pickupZone = fields[1];
+        std::string datetimeStr = fields[3];
 
-            string pZone = row[1];
-            string timeStr = row[3];
+        if (pickupZone.empty()) continue;
 
-            size_t space = timeStr.find(' ');
-            if (space != string::npos) {
-                try {
-                    int h = stoi(timeStr.substr(space + 1, 2));
-                    zone_counts[pZone]++;
-                    hourly_data[pZone][h]++;
-                } catch (...) {
-                    continue;
-                }
-            }
+        size_t spacePos = datetimeStr.find(' ');
+        if (spacePos == std::string::npos) continue;
+
+        std::string timePart = datetimeStr.substr(spacePos + 1);
+        size_t colonPos = timePart.find(':');
+        if (colonPos == std::string::npos || colonPos == 0) continue;
+
+        std::string hourStr = timePart.substr(0, colonPos);
+        // Trim whitespace
+        size_t start = hourStr.find_first_not_of(" \t");
+        size_t end = hourStr.find_last_not_of(" \t");
+        if (start == std::string::npos) continue;
+        hourStr = hourStr.substr(start, end - start + 1);
+
+        int hour = -1;
+        try {
+            hour = std::stoi(hourStr);
+        } catch (...) {
+            continue;
+        }
+
+        if (hour < 0 || hour > 23) continue; // A3: valid hour only
+
+        zoneCounts[pickupZone]++;
+        slotCounts[pickupZone][hour]++;
+    }
+}
+
+std::vector<ZoneCount> TripAnalyzer::topZones(int k) const {
+    const auto& [zoneCounts, slotCounts] = g_state.at(this);
+    std::vector<ZoneCount> result;
+    for (const auto& p : zoneCounts) {
+        result.push_back({p.first, p.second});
+    }
+
+    std::sort(result.begin(), result.end(), [](const ZoneCount& a, const ZoneCount& b) {
+        if (a.count != b.count) return a.count > b.count; // desc count
+        return a.zone < b.zone; // asc zone (B2)
+    });
+
+    if (static_cast<int>(result.size()) > k)
+        result.resize(k);
+    return result;
+}
+
+std::vector<SlotCount> TripAnalyzer::topBusySlots(int k) const {
+    const auto& [zoneCounts, slotCounts] = g_state.at(this);
+    std::vector<SlotCount> result;
+    for (const auto& zoneEntry : slotCounts) {
+        const std::string& zone = zoneEntry.first;
+        for (const auto& hourEntry : zoneEntry.second) {
+            result.push_back({zone, hourEntry.first, hourEntry.second});
         }
     }
 
-    vector<ZoneCount> topZones() {
-        vector<ZoneCount> list;
-        for (auto const& pair : zone_counts)
-            list.push_back({pair.first, pair.second});
+    std::sort(result.begin(), result.end(), [](const SlotCount& a, const SlotCount& b) {
+        if (a.count != b.count) return a.count > b.count;
+        if (a.zone != b.zone) return a.zone < b.zone;
+        return a.hour < b.hour; // C3: hour asc tie-break
+    });
 
-        sort(list.begin(), list.end(), [](const ZoneCount& a, const ZoneCount& b) {
-            if (a.count != b.count) return a.count > b.count;
-            return a.zone < b.zone;
-        });
-
-        if (list.size() > 10) list.resize(10);
-        return list;
-    }
-
-    vector<SlotCount> topBusySlots() {
-        vector<SlotCount> list;
-        for (auto const& zPair : hourly_data) {
-            for (auto const& hPair : zPair.second)
-                list.push_back({zPair.first, hPair.first, hPair.second});
-        }
-
-        sort(list.begin(), list.end(), [](const SlotCount& a, const SlotCount& b) {
-            if (a.count != b.count) return a.count > b.count;
-            if (a.zone != b.zone) return a.zone < b.zone;
-            return a.hour < b.hour;
-        });
-
-        if (list.size() > 10) list.resize(10);
-        return list;
-    }
-};
-
-int main() {
-    // 🔴 ONLY DIFFERENCE FROM HACKERRANK
-    freopen("input.csv", "r", stdin);
-
-    TripAnalyzer analyzer;
-    analyzer.ingestStdin();
-
-    cout << "TOP_ZONES\n";
-    for (auto& z : analyzer.topZones())
-        cout << z.zone << "," << z.count << "\n";
-
-    cout << "TOP_SLOTS\n";
-    for (auto& s : analyzer.topBusySlots())
-        cout << s.zone << "," << s.hour << "," << s.count << "\n";
-
-    return 0;
+    if (static_cast<int>(result.size()) > k)
+        result.resize(k);
+    return result;
 }
