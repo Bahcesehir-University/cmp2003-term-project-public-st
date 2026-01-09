@@ -6,21 +6,26 @@
 #include <algorithm>
 #include <string>
 #include <cctype>
+#include <map>
 
-class TripAnalyzer {
-public:
-    void ingestFile(const std::string& csvPath);
-    std::vector<ZoneCount> topZones(int k = 10) const;
-    std::vector<SlotCount> topBusySlots(int k = 10) const;
-
-private:
+// Private data structure
+struct AnalyzerData {
     std::unordered_map<std::string, long long> zoneCounts;
     std::unordered_map<std::string, std::unordered_map<int, long long>> slotCounts;
 };
 
+// Map each object to its data (safe for multiple instances)
+static std::map<const TripAnalyzer*, AnalyzerData> s_data;
+
+// Helper to get data for 'this'
+inline AnalyzerData& getData(const TripAnalyzer* self) {
+    return s_data[self];
+}
+
 void TripAnalyzer::ingestFile(const std::string& csvPath) {
-    zoneCounts.clear();
-    slotCounts.clear();
+    auto& data = getData(this);
+    data.zoneCounts.clear();
+    data.slotCounts.clear();
 
     std::ifstream file(csvPath);
     if (!file.is_open()) {
@@ -40,7 +45,7 @@ void TripAnalyzer::ingestFile(const std::string& csvPath) {
             fields.push_back(field);
         }
 
-        if (fields.size() != 6) continue; // malformed row
+        if (fields.size() != 6) continue;
 
         std::string pickupZone = fields[1];
         std::string datetimeStr = fields[3];
@@ -51,20 +56,16 @@ void TripAnalyzer::ingestFile(const std::string& csvPath) {
         if (spacePos == std::string::npos) continue;
 
         std::string timePart = datetimeStr.substr(spacePos + 1);
-        if (timePart.length() < 2) continue;
-
-        // Parse hour from "HH:MM" or "H:MM"
-        int hour = -1;
         size_t colonPos = timePart.find(':');
         if (colonPos == std::string::npos || colonPos == 0) continue;
 
         std::string hourStr = timePart.substr(0, colonPos);
-        // Trim whitespace
         auto start = hourStr.find_first_not_of(" \t");
         auto end = hourStr.find_last_not_of(" \t");
         if (start == std::string::npos) continue;
         hourStr = hourStr.substr(start, end - start + 1);
 
+        int hour = -1;
         try {
             hour = std::stoi(hourStr);
         } catch (...) {
@@ -73,14 +74,16 @@ void TripAnalyzer::ingestFile(const std::string& csvPath) {
 
         if (hour < 0 || hour > 23) continue;
 
-        zoneCounts[pickupZone]++;
-        slotCounts[pickupZone][hour]++;
+        data.zoneCounts[pickupZone]++;
+        data.slotCounts[pickupZone][hour]++;
     }
 }
 
 std::vector<ZoneCount> TripAnalyzer::topZones(int k) const {
+    const auto& data = getData(this);
     std::vector<ZoneCount> result;
-    for (const auto& p : zoneCounts) {
+    result.reserve(data.zoneCounts.size());
+    for (const auto& p : data.zoneCounts) {
         result.push_back({p.first, p.second});
     }
 
@@ -95,8 +98,10 @@ std::vector<ZoneCount> TripAnalyzer::topZones(int k) const {
 }
 
 std::vector<SlotCount> TripAnalyzer::topBusySlots(int k) const {
+    const auto& data = getData(this);
     std::vector<SlotCount> result;
-    for (const auto& zoneEntry : slotCounts) {
+    result.reserve(data.slotCounts.size() * 24);
+    for (const auto& zoneEntry : data.slotCounts) {
         const std::string& zone = zoneEntry.first;
         for (const auto& hourEntry : zoneEntry.second) {
             result.push_back({zone, hourEntry.first, hourEntry.second});
