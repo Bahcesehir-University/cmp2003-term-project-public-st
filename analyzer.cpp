@@ -1,143 +1,137 @@
 #include "analyzer.h"
 #include <fstream>
-#include <sstream>
 #include <unordered_map>
 #include <vector>
 #include <algorithm>
-#include <cctype>
 #include <string>
 
 using namespace std;
 
-// Static storage — safe because autograder uses one instance per run
 static unordered_map<string, long long> zoneCounts;
 static unordered_map<string, long long> slotCounts;
 
-// Helper: trim leading/trailing whitespace safely
-static inline void trim(string& s) {
-    size_t start = s.find_first_not_of(" \t\r\n");
-    size_t end = s.find_last_not_of(" \t\r\n");
-    if (start == string::npos) {
-        s.clear();
-    } else {
-        s = s.substr(start, end - start + 1);
+// Fast split by comma (assumes well-formed but skips bad rows)
+static bool parseLine(const string& line, string& pickupZone, int& hour) {
+    size_t start = 0;
+    int field = 0;
+    string fields[4]; // we only need field[1] and field[3]
+
+    for (size_t i = 0; i <= line.size(); ++i) {
+        if (i == line.size() || line[i] == ',') {
+            if (field < 4) {
+                fields[field] = line.substr(start, i - start);
+                field++;
+            }
+            start = i + 1;
+        }
     }
+
+    if (field < 4) return false;
+
+    pickupZone = fields[1];
+    const string& datetime = fields[3];
+
+    // Skip trimming if we trust data (or do minimal trim)
+    if (pickupZone.empty()) return false;
+
+    // Find last space
+    size_t space = datetime.rfind(' ');
+    if (space == string::npos || space + 6 > datetime.size()) return false;
+
+    const string& timePart = datetime.substr(space + 1);
+    if (timePart.size() < 2 || !isdigit(timePart[0])) return false;
+
+    int h = 0;
+    if (timePart[1] == ':') {
+        // Single-digit hour: "8:42"
+        h = timePart[0] - '0';
+    } else if (timePart.size() >= 2 && timePart[2] == ':') {
+        // Two-digit hour: "08:42"
+        h = (timePart[0] - '0') * 10 + (timePart[1] - '0');
+    } else {
+        return false;
+    }
+
+    if (h < 0 || h > 23) return false;
+    hour = h;
+    return true;
 }
 
 void TripAnalyzer::ingestFile(const string& csvPath) {
     zoneCounts.clear();
     slotCounts.clear();
 
-    ifstream file(csvPath);
-    if (!file.is_open()) {
-        return; // A1: missing/empty file → return empty results
-    }
+    ifstream file(csvPath, ios::in);
+    if (!file.is_open()) return;
 
     string line;
-    bool firstLine = true;
+    bool first = true;
+
+    // Reserve for large input
+    zoneCounts.reserve(100000);
+    slotCounts.reserve(2400000);
 
     while (getline(file, line)) {
         if (line.empty()) continue;
+        if (line.back() == '\r') line.pop_back();
 
-        // Handle Windows line endings
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
+        if (first) {
+            first = false;
+            if (line.find("TripID") != string::npos) continue;
         }
 
-        // Skip header if it contains "TripID"
-        if (firstLine) {
-            firstLine = false;
-            if (line.find("TripID") != string::npos) {
-                continue;
-            }
-        }
+        string zone;
+        int hour;
+        if (!parseLine(line, zone, hour)) continue;
 
-        stringstream ss(line);
-        string tripID, pickupZone, dropoffZone, datetime, distance, fare;
-
-        // Read exactly 6 comma-separated fields
-        if (!getline(ss, tripID, ',') ||
-            !getline(ss, pickupZone, ',') ||
-            !getline(ss, dropoffZone, ',') ||
-            !getline(ss, datetime, ',') ||
-            !getline(ss, distance, ',') ||
-            !getline(ss, fare, ',')) {
-            continue; // A2: malformed row → skip
-        }
-
-        trim(pickupZone);
-        trim(datetime);
-
-        if (pickupZone.empty()) continue;
-
-        // Parse hour from PickupDateTime: "YYYY-MM-DD HH:MM"
-        size_t spacePos = datetime.find(' ');
-        if (spacePos == string::npos) continue;
-
-        string timePart = datetime.substr(spacePos + 1);
-        size_t colonPos = timePart.find(':');
-        if (colonPos == string::npos || colonPos == 0) continue;
-
-        string hourStr = timePart.substr(0, colonPos);
-        trim(hourStr);
-        if (hourStr.empty()) continue;
-
-        int hour = -1;
-        try {
-            hour = stoi(hourStr);
-        } catch (...) {
-            continue; // invalid number
-        }
-
-        if (hour < 0 || hour > 23) continue; // A3: only hours 0–23
-
-        // Aggregate counts
-        zoneCounts[pickupZone]++;
-        slotCounts[pickupZone + "#" + to_string(hour)]++;
+        zoneCounts[zone]++;
+        slotCounts[zone + "#" + to_string(hour)]++;
     }
 }
 
+// Keep your heap-based topZones / topBusySlots — they're already optimal for small k
 vector<ZoneCount> TripAnalyzer::topZones(int k) const {
-    vector<ZoneCount> result;
-    result.reserve(zoneCounts.size());
-    for (const auto& p : zoneCounts) {
-        result.push_back({p.first, p.second});
-    }
-
-    // Sort: count desc, then zone asc (B2)
-    sort(result.begin(), result.end(), [](const ZoneCount& a, const ZoneCount& b) {
+    auto cmp = [](const ZoneCount& a, const ZoneCount& b) {
         if (a.count != b.count) return a.count > b.count;
         return a.zone < b.zone;
-    });
+    };
+    vector<ZoneCount> heap;
+    heap.reserve(k + 1);
 
-    if (static_cast<int>(result.size()) > k)
-        result.resize(k);
-    return result;
+    for (const auto& z : zoneCounts) {
+        heap.push_back({z.first, z.second});
+        push_heap(heap.begin(), heap.end(), cmp);
+        if ((int)heap.size() > k) {
+            pop_heap(heap.begin(), heap.end(), cmp);
+            heap.pop_back();
+        }
+    }
+    sort_heap(heap.begin(), heap.end(), cmp);
+    reverse(heap.begin(), heap.end());
+    return heap;
 }
 
 vector<SlotCount> TripAnalyzer::topBusySlots(int k) const {
-    vector<SlotCount> result;
-    result.reserve(slotCounts.size());
-    for (const auto& p : slotCounts) {
-        const string& key = p.first;
-        size_t pos = key.find('#');
-        if (pos == string::npos) continue;
-
-        string zone = key.substr(0, pos);
-        int hour = stoi(key.substr(pos + 1));
-        long long count = p.second;
-
-        result.push_back({zone, hour, count});
-    }
-
-    // Sort: count desc, zone asc, hour asc (C3)
-    sort(result.begin(), result.end(), [](const SlotCount& a, const SlotCount& b) {
+    auto cmp = [](const SlotCount& a, const SlotCount& b) {
         if (a.count != b.count) return a.count > b.count;
         if (a.zone != b.zone) return a.zone < b.zone;
         return a.hour < b.hour;
-    });
+    };
+    vector<SlotCount> heap;
+    heap.reserve(k + 1);
 
-    if (static_cast<int>(result.size()) > k)
-        result.resize(k);
-    return result;
+    for (const auto& s : slotCounts) {
+        size_t pos = s.first.find('#');
+        if (pos == string::npos) continue;
+        SlotCount sc{ s.first.substr(0, pos), stoi(s.first.substr(pos + 1)), s.second };
+        heap.push_back(sc);
+        push_heap(heap.begin(), heap.end(), cmp);
+        if ((int)heap.size() > k) {
+            pop_heap(heap.begin(), heap.end(), cmp);
+            heap.pop_back();
+        }
+    }
+    sort_heap(heap.begin(), heap.end(), cmp);
+    reverse(heap.begin(), heap.end());
+    return heap;
 }
