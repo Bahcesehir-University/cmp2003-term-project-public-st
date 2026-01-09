@@ -7,8 +7,6 @@
 #include <string>
 #include <cctype>
 
-// We cannot modify analyzer.h, but we can add private members in .cpp
-// by redeclaring the class with identical public interface.
 class TripAnalyzer {
 public:
     void ingestFile(const std::string& csvPath);
@@ -26,7 +24,7 @@ void TripAnalyzer::ingestFile(const std::string& csvPath) {
 
     std::ifstream file(csvPath);
     if (!file.is_open()) {
-        return; // silently handle missing file (per test A1)
+        return;
     }
 
     std::string line;
@@ -49,20 +47,23 @@ void TripAnalyzer::ingestFile(const std::string& csvPath) {
 
         if (pickupZone.empty()) continue;
 
-        // Parse hour from "YYYY-MM-DD HH:MM"
         size_t spacePos = datetimeStr.find(' ');
         if (spacePos == std::string::npos) continue;
 
         std::string timePart = datetimeStr.substr(spacePos + 1);
         if (timePart.length() < 2) continue;
 
-        std::string hourStr = timePart.substr(0, 2);
+        // Parse hour from "HH:MM" or "H:MM"
         int hour = -1;
+        size_t colonPos = timePart.find(':');
+        if (colonPos == std::string::npos || colonPos == 0) continue;
 
-        // Validate that hourStr is two digits
-        if (hourStr.size() != 2 || !std::isdigit(hourStr[0]) || !std::isdigit(hourStr[1])) {
-            continue;
-        }
+        std::string hourStr = timePart.substr(0, colonPos);
+        // Trim whitespace
+        auto start = hourStr.find_first_not_of(" \t");
+        auto end = hourStr.find_last_not_of(" \t");
+        if (start == std::string::npos) continue;
+        hourStr = hourStr.substr(start, end - start + 1);
 
         try {
             hour = std::stoi(hourStr);
@@ -79,29 +80,22 @@ void TripAnalyzer::ingestFile(const std::string& csvPath) {
 
 std::vector<ZoneCount> TripAnalyzer::topZones(int k) const {
     std::vector<ZoneCount> result;
-    result.reserve(zoneCounts.size());
-
-    for (const auto& entry : zoneCounts) {
-        result.push_back({entry.first, entry.second});
+    for (const auto& p : zoneCounts) {
+        result.push_back({p.first, p.second});
     }
 
     std::sort(result.begin(), result.end(), [](const ZoneCount& a, const ZoneCount& b) {
-        if (a.count != b.count) {
-            return a.count > b.count; // descending by count
-        }
-        return a.zone < b.zone; // ascending by zone ID (tie-breaker)
+        if (a.count != b.count) return a.count > b.count;
+        return a.zone < b.zone;
     });
 
-    if (static_cast<int>(result.size()) > k) {
+    if (static_cast<int>(result.size()) > k)
         result.resize(k);
-    }
     return result;
 }
 
 std::vector<SlotCount> TripAnalyzer::topBusySlots(int k) const {
     std::vector<SlotCount> result;
-    result.reserve(slotCounts.size() * 24);
-
     for (const auto& zoneEntry : slotCounts) {
         const std::string& zone = zoneEntry.first;
         for (const auto& hourEntry : zoneEntry.second) {
@@ -110,17 +104,12 @@ std::vector<SlotCount> TripAnalyzer::topBusySlots(int k) const {
     }
 
     std::sort(result.begin(), result.end(), [](const SlotCount& a, const SlotCount& b) {
-        if (a.count != b.count) {
-            return a.count > b.count; // descending by count
-        }
-        if (a.zone != b.zone) {
-            return a.zone < b.zone; // ascending by zone
-        }
-        return a.hour < b.hour; // ascending by hour
+        if (a.count != b.count) return a.count > b.count;
+        if (a.zone != b.zone) return a.zone < b.zone;
+        return a.hour < b.hour;
     });
 
-    if (static_cast<int>(result.size()) > k) {
+    if (static_cast<int>(result.size()) > k)
         result.resize(k);
-    }
     return result;
 }
